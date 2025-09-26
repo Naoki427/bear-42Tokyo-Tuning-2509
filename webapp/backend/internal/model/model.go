@@ -66,4 +66,8 @@ type ListRequest struct {
 	SortField string `json:"sort_field"`
 	SortOrder string `json:"sort_order"`
 	Offset    int    `json:"-"`
+
+	AfterID     *int `json:"after_id,omitempty"`     // product_id の続き用
+	AfterValue  *int `json:"after_value,omitempty"`  // SortField=value のときに使う
+	AfterWeight *int `json:"after_weight,omitempty"` // SortField=weight のときに使う
 }
