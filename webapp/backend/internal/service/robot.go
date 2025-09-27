@@ -8,32 +8,62 @@ import (
 	"backend/internal/model"
 	"backend/internal/repository"
 	"backend/internal/service/utils"
+	"strconv"
 )
 
 type RobotService struct {
 	store *repository.Store
 }
 
-// キャッシュ用の構造体
-var deliveryPlanCache struct {
-	sync.RWMutex
-	plan      *model.DeliveryPlan
-	expiresAt time.Time
-}
-
 func NewRobotService(store *repository.Store) *RobotService {
 	return &RobotService{store: store}
 }
 
+// キャッシュ用の構造体
+type cachedPlan struct {
+    plan      *model.DeliveryPlan
+    orderIDs  []int64
+    expiresAt time.Time
+}
+
+var deliveryPlanCache struct {
+	sync.RWMutex
+	data map[string]cachedPlan
+}
+
+func init() {
+	deliveryPlanCache.data = make(map[string]cachedPlan)
+}
+
+func cacheKey(robotID string, capacity int) string {
+	return robotID + ":" + strconv.Itoa(capacity)
+}
+
 func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string, capacity int) (*model.DeliveryPlan, error) {
-	// ---- キャッシュ確認 ----
-	deliveryPlanCache.RLock()
-	if deliveryPlanCache.plan != nil && time.Now().Before(deliveryPlanCache.expiresAt) {
-		planCopy := *deliveryPlanCache.plan
-		deliveryPlanCache.RUnlock()
-		return &planCopy, nil
-	}
-	deliveryPlanCache.RUnlock()
+    key := cacheKey(robotID, capacity)
+
+    // ---- キャッシュ確認 ----
+    deliveryPlanCache.RLock()
+    if cp, ok := deliveryPlanCache.data[key]; ok && time.Now().Before(cp.expiresAt) {
+        deliveryPlanCache.RUnlock()
+
+        statuses, err := s.store.OrderRepo.GetStatusesByIDs(ctx, cp.orderIDs)
+        if err == nil {
+            allShipping := true
+            for _, st := range statuses {
+                if st != "shipping" {
+                    allShipping = false
+                    break
+                }
+            }
+            if allShipping {
+                planCopy := *cp.plan
+                return &planCopy, nil
+            }
+        }
+    } else {
+        deliveryPlanCache.RUnlock()
+    }
 
 	// ---- DBアクセスして生成 ----
 	var plan model.DeliveryPlan
@@ -52,7 +82,6 @@ func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string,
 				for i, order := range plan.Orders {
 					orderIDs[i] = order.OrderID
 				}
-
 				if err := txStore.OrderRepo.UpdateStatuses(ctx, orderIDs, "delivering"); err != nil {
 					return err
 				}
@@ -67,12 +96,15 @@ func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string,
 
 	// ---- キャッシュ保存 ----
 	deliveryPlanCache.Lock()
-	deliveryPlanCache.plan = &plan
-	deliveryPlanCache.expiresAt = time.Now().Add(500 * time.Millisecond) // 0.5秒キャッシュ
+	deliveryPlanCache.data[key] = cachedPlan{
+		plan:      &plan,
+		expiresAt: time.Now().Add(500 * time.Millisecond), // 0.5秒キャッシュ
+	}
 	deliveryPlanCache.Unlock()
 
 	return &plan, nil
 }
+
 
 
 func (s *RobotService) UpdateOrderStatus(ctx context.Context, orderID int64, newStatus string) error {
