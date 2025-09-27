@@ -7,6 +7,9 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type RobotHandler struct {
@@ -19,6 +22,10 @@ func NewRobotHandler(robotSvc *service.RobotService) *RobotHandler {
 
 // 配送計画を取得
 func (h *RobotHandler) GetDeliveryPlan(w http.ResponseWriter, r *http.Request) {
+	tracer := otel.Tracer("app/custom")
+	ctx, span := tracer.Start(r.Context(), "RobotHandler.GetDeliveryPlan")
+	defer span.End()
+
 	robotID := "robot-001"
 
 	capacityStr := r.URL.Query().Get("capacity")
@@ -32,7 +39,12 @@ func (h *RobotHandler) GetDeliveryPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plan, err := h.RobotSvc.GenerateDeliveryPlan(r.Context(), robotID, capacity)
+	span.SetAttributes(
+		attribute.String("robot.id", robotID),
+		attribute.Int("robot.capacity", capacity),
+	)
+
+	plan, err := h.RobotSvc.GenerateDeliveryPlan(ctx, robotID, capacity)
 	if err != nil {
 		log.Printf("Failed to generate delivery plan: %v", err)
 		http.Error(w, "Failed to create delivery plan", http.StatusInternalServerError)
@@ -45,13 +57,22 @@ func (h *RobotHandler) GetDeliveryPlan(w http.ResponseWriter, r *http.Request) {
 
 // 配送完了時に注文ステータスを更新
 func (h *RobotHandler) UpdateOrderStatus(w http.ResponseWriter, r *http.Request) {
+	tracer := otel.Tracer("app/custom")
+	ctx, span := tracer.Start(r.Context(), "RobotHandler.UpdateOrderStatus")
+	defer span.End()
+
 	var req model.UpdateOrderStatusRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	err := h.RobotSvc.UpdateOrderStatus(r.Context(), req.OrderID, req.NewStatus)
+	span.SetAttributes(
+		attribute.Int64("order.id", req.OrderID),
+		attribute.String("order.new_status", req.NewStatus),
+	)
+
+	err := h.RobotSvc.UpdateOrderStatus(ctx, req.OrderID, req.NewStatus)
 	if err != nil {
 		log.Printf("Failed to update order status for order %d: %v", req.OrderID, err)
 		http.Error(w, "Failed to update order status", http.StatusInternalServerError)

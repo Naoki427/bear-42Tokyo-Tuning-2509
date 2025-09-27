@@ -6,6 +6,9 @@ import (
 
 	"backend/internal/model"
 	"backend/internal/repository"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type ProductService struct {
@@ -17,6 +20,14 @@ func NewProductService(store *repository.Store) *ProductService {
 }
 
 func (s *ProductService) CreateOrders(ctx context.Context, userID int, items []model.RequestItem) ([]string, error) {
+	tracer := otel.Tracer("app/custom")
+	ctx, span := tracer.Start(ctx, "ProductService.CreateOrders")
+	defer span.End()
+	span.SetAttributes(
+		attribute.Int("user.id", userID),
+		attribute.Int("items.count", len(items)),
+	)
+
 	var insertedOrderIDs []string
 
 	err := s.store.ExecTx(ctx, func(txStore *repository.Store) error {
@@ -54,6 +65,18 @@ func (s *ProductService) CreateOrders(ctx context.Context, userID int, items []m
 }
 
 func (s *ProductService) FetchProducts(ctx context.Context, userID int, req model.ListRequest) ([]model.Product, int, error) {
+	tracer := otel.Tracer("app/custom")
+	ctx, span := tracer.Start(ctx, "ProductService.FetchProducts")
+	defer span.End()
+	span.SetAttributes(
+		attribute.Int("user.id", userID),
+		attribute.String("search", req.Search),
+		attribute.String("sort_field", req.SortField),
+		attribute.String("sort_order", req.SortOrder),
+		attribute.Int("page", req.Page),
+		attribute.Int("page_size", req.PageSize),
+	)
+
 	products, total, err := s.store.ProductRepo.ListProducts(ctx, userID, req)
 	return products, total, err
 }

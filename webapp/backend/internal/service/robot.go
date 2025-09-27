@@ -9,6 +9,9 @@ import (
 	"backend/internal/repository"
 	"backend/internal/service/utils"
 	"strconv"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type RobotService struct {
@@ -40,6 +43,14 @@ func cacheKey(robotID string, capacity int) string {
 }
 
 func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string, capacity int) (*model.DeliveryPlan, error) {
+	tracer := otel.Tracer("app/custom")
+	ctx, span := tracer.Start(ctx, "RobotService.GenerateDeliveryPlan")
+	defer span.End()
+	span.SetAttributes(
+		attribute.String("robot.id", robotID),
+		attribute.Int("robot.capacity", capacity),
+	)
+
     key := cacheKey(robotID, capacity)
 
     // ---- キャッシュ確認 ----
@@ -108,6 +119,14 @@ func (s *RobotService) GenerateDeliveryPlan(ctx context.Context, robotID string,
 
 
 func (s *RobotService) UpdateOrderStatus(ctx context.Context, orderID int64, newStatus string) error {
+	tracer := otel.Tracer("app/custom")
+	ctx, span := tracer.Start(ctx, "RobotService.UpdateOrderStatus")
+	defer span.End()
+	span.SetAttributes(
+		attribute.Int64("order.id", orderID),
+		attribute.String("order.new_status", newStatus),
+	)
+
 	return utils.WithTimeout(ctx, func(ctx context.Context) error {
 		return s.store.OrderRepo.UpdateStatuses(ctx, []int64{orderID}, newStatus)
 	})
@@ -119,6 +138,15 @@ func selectOrdersForDelivery(
 	robotID string,
 	robotCapacity int,
 ) (model.DeliveryPlan, error) {
+	tracer := otel.Tracer("app/custom")
+	ctx, span := tracer.Start(ctx, "selectOrdersForDelivery")
+	defer span.End()
+	span.SetAttributes(
+		attribute.Int("orders.count", len(orders)),
+		attribute.Int("robot.capacity", robotCapacity),
+		attribute.String("robot.id", robotID),
+	)
+
 	n := len(orders)
 	// dp[i][w] = i 個目まで見て容量 w のときの最大価値
 	dp := make([][]int, n+1)

@@ -8,6 +8,9 @@ import (
 
 	"backend/internal/model"
 	"backend/internal/service"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type AuthHandler struct {
@@ -20,6 +23,9 @@ func NewAuthHandler(authSvc *service.AuthService) *AuthHandler {
 
 // ログイン時にセッションを発行し、Cookieにセットする
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+	tracer := otel.Tracer("app/custom")
+	ctx, span := tracer.Start(r.Context(), "AuthHandler.Login")
+	defer span.End()
 	log.Println("-> Received request for /api/login")
 
 	var req model.LoginRequest
@@ -28,7 +34,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID, expiresAt, err := h.AuthSvc.Login(r.Context(), req.UserName, req.Password)
+	span.SetAttributes(attribute.String("user.name", req.UserName))
+	sessionID, expiresAt, err := h.AuthSvc.Login(ctx, req.UserName, req.Password)
 	if err != nil {
 		if errors.Is(err, service.ErrUserNotFound) || errors.Is(err, service.ErrInvalidPassword) {
 			http.Error(w, "Unauthorized: Invalid credentials", http.StatusUnauthorized)

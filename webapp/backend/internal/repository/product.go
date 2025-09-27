@@ -3,8 +3,6 @@ package repository
 import (
 	"backend/internal/model"
 	"context"
-	"strings"
-	"fmt"
 )
 
 type ProductRepository struct {
@@ -15,169 +13,153 @@ func NewProductRepository(db DBTX) *ProductRepository {
 	return &ProductRepository{db: db}
 }
 
-func (r *ProductRepository) ListProducts(
-	ctx context.Context, userID int, req model.ListRequest,
-) ([]model.Product, int, error) {
-	var (
-		products        []model.Product
-		searchWhereSQL  string   // ← 検索だけ（count 用）
-		searchArgs      []any    // ← 検索だけ（count 用）
-		dataWhereSQL    string   // ← 検索 + カーソル（データ取得用）
-		dataArgs        []any    // ← 検索 + カーソル（データ取得用）
-	)
+// 商品一覧を全件取得し、アプリケーション側でページング処理を行う
+func (r *ProductRepository) ListProducts(ctx context.Context, userID int, req model.ListRequest) ([]model.Product, int, error) {
+	var products []model.Product
+	baseQuery := `
+		SELECT product_id, name, value, weight, image, description
+		FROM products
+	`
+	args := []interface{}{}
 
-	// ---- 検索句を組み立て（count 用の where/args はこれだけを使う）----
 	if req.Search != "" {
-		var pat string
-		if req.Type == "prefix" {
-			pat = req.Search + "%"
-		} else {
-			pat = "%" + req.Search + "%" // 既定は部分一致（テスト期待どおり）
-		}
-		searchWhereSQL = "WHERE (name LIKE ? OR description LIKE ?)"
-		searchArgs = append(searchArgs, pat, pat)
-	}
-	// data 用の where は最初は検索だけをコピー
-	dataWhereSQL = searchWhereSQL
-	dataArgs = append(dataArgs, searchArgs...)
-
-	// ---- ソートホワイトリスト ----
-	sortField := "product_id"
-	switch req.SortField {
-	case "value", "weight", "name", "product_id":
-		sortField = req.SortField
-	}
-	sortOrder := "ASC"
-	if strings.ToUpper(req.SortOrder) == "DESC" {
-		sortOrder = "DESC"
+		baseQuery += " WHERE (name LIKE ? OR description LIKE ?)"
+		searchPattern := "%" + req.Search + "%"
+		args = append(args, searchPattern, searchPattern)
 	}
 
-	// ---- カラム別に最適化（カーソル条件は dataWhereSQL にのみ足す！）----
-	switch sortField {
-	case "value":
-		if req.AfterValue != nil && req.AfterID != nil {
-			op := ">"
-			if sortOrder == "DESC" { op = "<" }
-			if dataWhereSQL == "" {
-				dataWhereSQL = "WHERE (value, product_id) " + op + " (?, ?)"
-			} else {
-				dataWhereSQL += " AND (value, product_id) " + op + " (?, ?)"
-			}
-			dataArgs = append(dataArgs, *req.AfterValue, *req.AfterID)
+	baseQuery += " ORDER BY " + req.SortField + " " + req.SortOrder + " , product_id ASC"
 
-			q := fmt.Sprintf(`
-				SELECT product_id, name, value, weight, image, description
-				FROM products
-				%s
-				ORDER BY value %s, product_id %s
-				LIMIT ?`, dataWhereSQL, sortOrder, sortOrder)
-			args := append(dataArgs, req.PageSize)
-			if err := r.db.SelectContext(ctx, &products, q, args...); err != nil {
-				return nil, 0, err
-			}
-		} else {
-			q := fmt.Sprintf(`
-				SELECT product_id, name, value, weight, image, description
-				FROM products
-				%s
-				ORDER BY value %s, product_id %s
-				LIMIT ? OFFSET ?`, dataWhereSQL, sortOrder, sortOrder)
-			args := append(dataArgs, req.PageSize, req.Offset)
-			if err := r.db.SelectContext(ctx, &products, q, args...); err != nil {
-				return nil, 0, err
-			}
-		}
-
-	case "weight":
-		if req.AfterWeight != nil && req.AfterID != nil {
-			op := ">"
-			if sortOrder == "DESC" { op = "<" }
-			if dataWhereSQL == "" {
-				dataWhereSQL = "WHERE (weight, product_id) " + op + " (?, ?)"
-			} else {
-				dataWhereSQL += " AND (weight, product_id) " + op + " (?, ?)"
-			}
-			dataArgs = append(dataArgs, *req.AfterWeight, *req.AfterID)
-
-			q := fmt.Sprintf(`
-				SELECT product_id, name, value, weight, image, description
-				FROM products
-				%s
-				ORDER BY weight %s, product_id %s
-				LIMIT ?`, dataWhereSQL, sortOrder, sortOrder)
-			args := append(dataArgs, req.PageSize)
-			if err := r.db.SelectContext(ctx, &products, q, args...); err != nil {
-				return nil, 0, err
-			}
-		} else {
-			q := fmt.Sprintf(`
-				SELECT product_id, name, value, weight, image, description
-				FROM products
-				%s
-				ORDER BY weight %s, product_id %s
-				LIMIT ? OFFSET ?`, dataWhereSQL, sortOrder, sortOrder)
-			args := append(dataArgs, req.PageSize, req.Offset)
-			if err := r.db.SelectContext(ctx, &products, q, args...); err != nil {
-				return nil, 0, err
-			}
-		}
-
-	case "name":
-		q := fmt.Sprintf(`
-			SELECT product_id, name, value, weight, image, description
-			FROM products
-			%s
-			ORDER BY name %s, product_id %s
-			LIMIT ? OFFSET ?`, dataWhereSQL, sortOrder, sortOrder)
-		args := append(dataArgs, req.PageSize, req.Offset)
-		if err := r.db.SelectContext(ctx, &products, q, args...); err != nil {
-			return nil, 0, err
-		}
-
-	default: // product_id
-		if req.AfterID != nil {
-			op := ">"
-			if sortOrder == "DESC" { op = "<" }
-			if dataWhereSQL == "" {
-				dataWhereSQL = "WHERE product_id " + op + " ?"
-			} else {
-				dataWhereSQL += " AND product_id " + op + " ?"
-			}
-			dataArgs = append(dataArgs, *req.AfterID)
-
-			q := fmt.Sprintf(`
-				SELECT product_id, name, value, weight, image, description
-				FROM products
-				%s
-				ORDER BY product_id %s
-				LIMIT ?`, dataWhereSQL, sortOrder)
-			args := append(dataArgs, req.PageSize)
-			if err := r.db.SelectContext(ctx, &products, q, args...); err != nil {
-				return nil, 0, err
-			}
-		} else {
-			q := fmt.Sprintf(`
-				SELECT product_id, name, value, weight, image, description
-				FROM products
-				%s
-				ORDER BY product_id %s
-				LIMIT ? OFFSET ?`, dataWhereSQL, sortOrder)
-			args := append(dataArgs, req.PageSize, req.Offset)
-			if err := r.db.SelectContext(ctx, &products, q, args...); err != nil {
-				return nil, 0, err
-			}
-		}
-	}
-
-	// ---- 総件数：検索だけ（カーソル条件は一切入れない）----
-	var total int
-	countSQL := "SELECT COUNT(*) FROM products"
-	if searchWhereSQL != "" {
-		countSQL += " " + searchWhereSQL
-	}
-	if err := r.db.GetContext(ctx, &total, countSQL, searchArgs...); err != nil {
+	err := r.db.SelectContext(ctx, &products, baseQuery, args...)
+	if err != nil {
 		return nil, 0, err
 	}
 
-	return products, total, nil
+	total := len(products)
+	start := req.Offset
+	end := req.Offset + req.PageSize
+	if start > total {
+		start = total
+	}
+	if end > total {
+		end = total
+	}
+	pagedProducts := products[start:end]
+
+	return pagedProducts, total, nil
 }
+
+// package repository
+
+// import (
+// 	"backend/internal/model"
+// 	"context"
+// 	"sort"
+// 	"strings"
+// 	"sync"
+// )
+
+// type ProductRepository struct {
+// 	db DBTX
+// }
+
+// // --- プリロード用キャッシュ ---
+// var (
+// 	productCache     []model.Product
+// 	productCacheLock sync.RWMutex
+// )
+
+// func NewProductRepository(db DBTX) *ProductRepository {
+// 	return &ProductRepository{db: db}
+// }
+
+// // プリロード: アプリ起動時や定期的に呼んで全件ロード
+// func (r *ProductRepository) PreloadProducts(ctx context.Context) error {
+// 	var products []model.Product
+// 	query := `
+// 		SELECT product_id, name, value, weight, image, description
+// 		FROM products
+// 	`
+// 	if err := r.db.SelectContext(ctx, &products, query); err != nil {
+// 		return err
+// 	}
+
+// 	productCacheLock.Lock()
+// 	productCache = products
+// 	productCacheLock.Unlock()
+// 	return nil
+// }
+
+// func (r *ProductRepository) ListProducts(ctx context.Context, userID int, req model.ListRequest) ([]model.Product, int, error) {
+// 	productCacheLock.RLock()
+	
+// 	// キャッシュが空の場合は初回ロード
+// 	if len(productCache) == 0 {
+// 		productCacheLock.RUnlock()
+// 		if err := r.PreloadProducts(ctx); err != nil {
+// 			return nil, 0, err
+// 		}
+// 		productCacheLock.RLock()
+// 	}
+// 	defer productCacheLock.RUnlock()
+
+// 	// --- フィルタ（検索条件）---
+// 	filtered := make([]model.Product, 0)
+// 	if req.Search != "" {
+// 		searchLower := strings.ToLower(req.Search)
+// 		for _, p := range productCache {
+// 			if strings.Contains(strings.ToLower(p.Name), searchLower) ||
+// 				strings.Contains(strings.ToLower(p.Description), searchLower) {
+// 				filtered = append(filtered, p)
+// 			}
+// 		}
+// 	} else {
+// 		filtered = append(filtered, productCache...)
+// 	}
+
+// 	// --- ソート ---
+// 	switch req.SortField {
+// 	case "name":
+// 		sort.Slice(filtered, func(i, j int) bool {
+// 			if strings.ToUpper(req.SortOrder) == "DESC" {
+// 				return filtered[i].Name > filtered[j].Name
+// 			}
+// 			return filtered[i].Name < filtered[j].Name
+// 		})
+// 	case "value":
+// 		sort.Slice(filtered, func(i, j int) bool {
+// 			if strings.ToUpper(req.SortOrder) == "DESC" {
+// 				return filtered[i].Value > filtered[j].Value
+// 			}
+// 			return filtered[i].Value < filtered[j].Value
+// 		})
+// 	case "weight":
+// 		sort.Slice(filtered, func(i, j int) bool {
+// 			if strings.ToUpper(req.SortOrder) == "DESC" {
+// 				return filtered[i].Weight > filtered[j].Weight
+// 			}
+// 			return filtered[i].Weight < filtered[j].Weight
+// 		})
+// 	default: // product_id
+// 		sort.Slice(filtered, func(i, j int) bool {
+// 			if strings.ToUpper(req.SortOrder) == "DESC" {
+// 				return filtered[i].ProductID > filtered[j].ProductID
+// 			}
+// 			return filtered[i].ProductID < filtered[j].ProductID
+// 		})
+// 	}
+
+// 	// --- ページング ---
+// 	total := len(filtered)
+// 	start := req.Offset
+// 	end := req.Offset + req.PageSize
+// 	if start > total {
+// 		start = total
+// 	}
+// 	if end > total {
+// 		end = total
+// 	}
+// 	pagedProducts := filtered[start:end]
+
+// 	return pagedProducts, total, nil
+// }

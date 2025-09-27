@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type OrderHandler struct {
@@ -19,11 +22,16 @@ func NewOrderHandler(svc *service.OrderService) *OrderHandler {
 
 // 注文履歴一覧を取得
 func (h *OrderHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.GetUserFromContext(r.Context())
+	tracer := otel.Tracer("app/custom")
+	ctx, span := tracer.Start(r.Context(), "OrderHandler.List")
+	defer span.End()
+
+	userID, ok := middleware.GetUserFromContext(ctx)
 	if !ok {
 		http.Error(w, "User not found", http.StatusInternalServerError)
 		return
 	}
+	span.SetAttributes(attribute.Int("user.id", userID))
 
 	var req model.ListRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -48,7 +56,12 @@ func (h *OrderHandler) List(w http.ResponseWriter, r *http.Request) {
 		req.Type = "partial"
 	}
 
-	orders, total, err := h.OrderSvc.FetchOrders(r.Context(), userID, req)
+	span.SetAttributes(
+		attribute.String("search", req.Search),
+		attribute.String("sort_field", req.SortField),
+		attribute.String("type", req.Type),
+	)
+	orders, total, err := h.OrderSvc.FetchOrders(ctx, userID, req)
 	if err != nil {
 		log.Printf("Failed to fetch orders for user %d: %v", userID, err)
 		http.Error(w, "Failed to fetch orders", http.StatusInternalServerError)

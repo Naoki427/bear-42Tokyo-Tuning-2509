@@ -11,6 +11,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type ProductHandler struct {
@@ -23,11 +26,16 @@ func NewProductHandler(svc *service.ProductService) *ProductHandler {
 
 // 商品一覧を取得
 func (h *ProductHandler) List(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.GetUserFromContext(r.Context())
+	tracer := otel.Tracer("app/custom")
+	ctx, span := tracer.Start(r.Context(), "ProductHandler.List")
+	defer span.End()
+
+	userID, ok := middleware.GetUserFromContext(ctx)
 	if !ok {
 		http.Error(w, "User not found in context", http.StatusInternalServerError)
 		return
 	}
+	span.SetAttributes(attribute.Int("user.id", userID))
 
 	var req model.ListRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -49,7 +57,7 @@ func (h *ProductHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Offset = (req.Page - 1) * req.PageSize
 
-	products, total, err := h.ProductSvc.FetchProducts(r.Context(), userID, req)
+	products, total, err := h.ProductSvc.FetchProducts(ctx, userID, req)
 	if err != nil {
 		log.Printf("Failed to fetch products for user %d: %v", userID, err)
 		http.Error(w, "Failed to fetch products", http.StatusInternalServerError)
@@ -70,11 +78,16 @@ func (h *ProductHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // 注文を作成
 func (h *ProductHandler) CreateOrders(w http.ResponseWriter, r *http.Request) {
-	userID, ok := middleware.GetUserFromContext(r.Context())
+	tracer := otel.Tracer("app/custom")
+	ctx, span := tracer.Start(r.Context(), "ProductHandler.CreateOrders")
+	defer span.End()
+
+	userID, ok := middleware.GetUserFromContext(ctx)
 	if !ok {
 		http.Error(w, "User not found in context", http.StatusInternalServerError)
 		return
 	}
+	span.SetAttributes(attribute.Int("user.id", userID))
 
 	var req model.CreateOrderRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -82,7 +95,8 @@ func (h *ProductHandler) CreateOrders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	insertedOrderIDs, err := h.ProductSvc.CreateOrders(r.Context(), userID, req.Items)
+	span.SetAttributes(attribute.Int("items.count", len(req.Items)))
+	insertedOrderIDs, err := h.ProductSvc.CreateOrders(ctx, userID, req.Items)
 	if err != nil {
 		log.Printf("Failed to create orders: %v", err)
 		http.Error(w, "Failed to process order request", http.StatusInternalServerError)
