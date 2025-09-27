@@ -64,6 +64,25 @@ func (r *OrderRepository) GetShippingOrders(ctx context.Context) ([]model.Order,
 	return orders, err
 }
 
+//キャッシュのorderのstatusを取得するため
+func (r *OrderRepository) GetStatusesByIDs(ctx context.Context, orderIDs []int64) ([]string, error) {
+    if len(orderIDs) == 0 {
+        return []string{}, nil
+    }
+    query, args, err := sqlx.In("SELECT shipped_status FROM orders WHERE order_id IN (?)", orderIDs)
+    if err != nil {
+        return nil, err
+    }
+    query = r.db.Rebind(query)
+
+    var statuses []string
+    if err := r.db.SelectContext(ctx, &statuses, query, args...); err != nil {
+        return nil, err
+    }
+    return statuses, nil
+}
+
+
 // 注文履歴一覧を取得
 func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.ListRequest) ([]model.Order, int, error) {
     // ソート列を決定
