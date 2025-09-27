@@ -86,6 +86,7 @@ func (r *OrderRepository) GetStatusesByIDs(ctx context.Context, orderIDs []int64
 func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.ListRequest) ([]model.Order, int, error) {
     // ソート列を決定
     sortField := "o.order_id"
+    // ... (ソート列決定ロジックは変更なし) ...
     switch req.SortField {
     case "product_name":
         sortField = "p.name"
@@ -116,20 +117,11 @@ func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.
         }
     }
 
-    // 件数取得
-    countQuery := fmt.Sprintf(`
-        SELECT COUNT(*)
-        FROM orders o
-        JOIN products p ON o.product_id = p.product_id
-        WHERE o.user_id = ? %s
-    `, searchCond)
-
-    var total int
-    if err := r.db.GetContext(ctx, &total, countQuery, args...); err != nil {
-        return nil, 0, err
-    }
-
-    // データ取得
+    // データ取得と件数取得を同時に行う1つのクエリ
+    // 最初の 'args' の後に LIMIT と OFFSET 用のパラメータが続くため、
+    // queryのパラメータ数に注意してargsスライスを作成する。
+    
+    // NOTE: SELECT句に COUNT(*) OVER() を追加し、total_countとして取得する
     query := fmt.Sprintf(`
         SELECT
             o.order_id,
@@ -137,7 +129,8 @@ func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.
             o.shipped_status,
             o.created_at,
             o.arrived_at,
-            p.name AS product_name
+            p.name AS product_name,
+            COUNT(*) OVER() AS total_count  -- ★ 1クエリ化のキーポイント
         FROM orders o
         JOIN products p ON o.product_id = p.product_id
         WHERE o.user_id = ? %s
@@ -145,11 +138,30 @@ func (r *OrderRepository) ListOrders(ctx context.Context, userID int, req model.
         LIMIT ? OFFSET ?
     `, searchCond, sortField, sortOrder)
 
-    args = append(args, req.PageSize, req.Offset)
+    // LIMITとOFFSETのためのパラメータを追加
+    queryArgs := append(args, req.PageSize, req.Offset)
 
-    var orders []model.Order
-    if err := r.db.SelectContext(ctx, &orders, query, args...); err != nil {
+    var ordersWithTotalCount []struct {
+        model.Order
+        TotalCount int `db:"total_count"`
+    }
+    
+    if err := r.db.SelectContext(ctx, &ordersWithTotalCount, query, queryArgs...); err != nil {
         return nil, 0, err
+    }
+
+    // 結果の処理
+    if len(ordersWithTotalCount) == 0 {
+        return nil, 0, nil
+    }
+
+    // total_countは最初の要素から取得
+    total := ordersWithTotalCount[0].TotalCount
+    
+    // model.Orderのスライスに変換
+    orders := make([]model.Order, len(ordersWithTotalCount))
+    for i, item := range ordersWithTotalCount {
+        orders[i] = item.Order
     }
 
     return orders, total, nil
