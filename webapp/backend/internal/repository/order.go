@@ -1,3 +1,5 @@
+// webapp/backend/internal/repository/order.go
+
 package repository
 
 import (
@@ -16,6 +18,42 @@ type OrderRepository struct {
 func NewOrderRepository(db DBTX) *OrderRepository {
 	return &OrderRepository{db: db}
 }
+
+// CreateOrders は複数の注文を一括で作成する（バルクインサート）
+func (r *OrderRepository) CreateOrders(ctx context.Context, userID int, productIDs []int) ([]string, error) {
+	if len(productIDs) == 0 {
+		return []string{}, nil
+	}
+
+	query := "INSERT INTO orders (user_id, product_id, shipped_status, created_at) VALUES "
+	var args []interface{}
+	var placeholders []string
+
+	for _, pID := range productIDs {
+		placeholders = append(placeholders, "(?, ?, 'shipping', NOW())")
+		args = append(args, userID, pID)
+	}
+
+	query += strings.Join(placeholders, ",")
+
+	result, err := r.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to bulk insert orders: %w", err)
+	}
+
+	lastID, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+	rowsAffected := int64(len(productIDs))
+
+	insertedIDs := make([]string, rowsAffected)
+	for i := 0; i < int(rowsAffected); i++ {
+		insertedIDs[i] = fmt.Sprintf("%d", int(lastID)-int(rowsAffected)+1+i)
+	}
+	return insertedIDs, nil
+}
+
 
 // 注文を作成し、生成された注文IDを返す
 func (r *OrderRepository) Create(ctx context.Context, order *model.Order) (string, error) {
