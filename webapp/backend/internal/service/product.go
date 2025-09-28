@@ -1,8 +1,9 @@
+
 package service
 
 import (
 	"context"
-	"log"
+	"log" // logパッケージをインポート
 
 	"backend/internal/model"
 	"backend/internal/repository"
@@ -16,39 +17,28 @@ func NewProductService(store *repository.Store) *ProductService {
 	return &ProductService{store: store}
 }
 
+// ★ この CreateOrders 関数をまるごと書き換える
 func (s *ProductService) CreateOrders(ctx context.Context, userID int, items []model.RequestItem) ([]string, error) {
-	var insertedOrderIDs []string
-
-	err := s.store.ExecTx(ctx, func(txStore *repository.Store) error {
-		itemsToProcess := make(map[int]int)
-		for _, item := range items {
-			if item.Quantity > 0 {
-				itemsToProcess[item.ProductID] = item.Quantity
+	
+	var productIDsToOrder []int
+	for _, item := range items {
+		if item.Quantity > 0 {
+			for i := 0; i < item.Quantity; i++ {
+				productIDsToOrder = append(productIDsToOrder, item.ProductID)
 			}
 		}
-		if len(itemsToProcess) == 0 {
-			return nil
-		}
+	}
+	
+	if len(productIDsToOrder) == 0 {
+		return []string{}, nil
+	}
 
-		for pID, quantity := range itemsToProcess {
-			for i := 0; i < quantity; i++ {
-				order := &model.Order{
-					UserID:    userID,
-					ProductID: pID,
-				}
-				orderID, err := txStore.OrderRepo.Create(ctx, order)
-				if err != nil {
-					return err
-				}
-				insertedOrderIDs = append(insertedOrderIDs, orderID)
-			}
-		}
-		return nil
-	})
-
+	// repositoryに新設したバルクインサート用の関数を呼び出す
+	insertedOrderIDs, err := s.store.OrderRepo.CreateOrders(ctx, userID, productIDsToOrder)
 	if err != nil {
 		return nil, err
 	}
+
 	log.Printf("Created %d orders for user %d", len(insertedOrderIDs), userID)
 	return insertedOrderIDs, nil
 }
